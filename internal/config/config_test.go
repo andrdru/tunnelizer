@@ -14,6 +14,16 @@ import (
 const (
 	configFilePerm = 0o600
 	testAlias      = "db"
+
+	validConfigBody = `
+tunnels:
+  db:
+    host: bastion.example.com
+    local_port: 5432
+    remote_host: db.internal
+    remote_port: 5432
+`
+	brokenConfigBody = "tunnels: ["
 )
 
 func boolPtr(value bool) *bool {
@@ -109,6 +119,78 @@ func TestLoadErrors(t *testing.T) {
 
 		require.Error(tt, err)
 	})
+}
+
+func TestLoadOrCreate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		setup      func(tt *testing.T) string
+		expErr     bool
+		expTunnels int
+		expBody    string
+	}{
+		{
+			name: "creates missing file with parent dirs",
+			setup: func(tt *testing.T) string {
+				return filepath.Join(tt.TempDir(), "nested", "config.yaml")
+			},
+		},
+		{
+			name: "loads existing config",
+			setup: func(tt *testing.T) string {
+				return writeConfig(tt, validConfigBody)
+			},
+			expTunnels: 1,
+		},
+		{
+			name: "keeps broken yaml untouched",
+			setup: func(tt *testing.T) string {
+				return writeConfig(tt, brokenConfigBody)
+			},
+			expErr:  true,
+			expBody: brokenConfigBody,
+		},
+		{
+			name: "reports save failure",
+			setup: func(tt *testing.T) string {
+				blocker := filepath.Join(tt.TempDir(), "blocker")
+				require.NoError(tt, os.WriteFile(blocker, nil, configFilePerm))
+
+				return filepath.Join(blocker, "config.yaml")
+			},
+			expErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(tt *testing.T) {
+			tt.Parallel()
+
+			path := tc.setup(tt)
+
+			cfg, err := config.LoadOrCreate(path)
+			if tc.expErr {
+				require.Error(tt, err)
+
+				if tc.expBody != "" {
+					data, rerr := os.ReadFile(path) // #nosec G304 -- path points to a file created by the test
+					require.NoError(tt, rerr)
+					assert.Equal(tt, tc.expBody, string(data))
+				}
+
+				return
+			}
+
+			require.NoError(tt, err)
+			assert.Len(tt, cfg.Tunnels, tc.expTunnels)
+
+			reloaded, rerr := config.Load(path)
+			require.NoError(tt, rerr)
+			assert.Equal(tt, cfg.Aliases(), reloaded.Aliases())
+		})
+	}
 }
 
 func TestLoadAggregatesProblems(t *testing.T) {

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/fs"
 	"strconv"
 	"strings"
 
@@ -35,7 +34,7 @@ func runAdd(paths Paths, args []string) error {
 		return fmt.Errorf("cli.add: %w", err)
 	}
 
-	cfg, err := loadOrEmpty(paths.Config)
+	cfg, err := config.LoadOrCreate(paths.Config)
 	if err != nil {
 		return fmt.Errorf("cli.add: %w", err)
 	}
@@ -83,19 +82,6 @@ func runAdd(paths Paths, args []string) error {
 	fmt.Printf("%s: added\n", aliasValue)
 
 	return nil
-}
-
-func loadOrEmpty(path string) (*config.Config, error) {
-	cfg, err := config.Load(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return &config.Config{}, nil
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("cli.loadOrEmpty: %w", err)
-	}
-
-	return cfg, nil
 }
 
 func fillWizard(def config.Defaults, alias *string, t *config.Tunnel) error {

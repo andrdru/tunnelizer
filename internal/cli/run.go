@@ -27,7 +27,7 @@ func runRunner(paths Paths, args []string) error {
 
 	alias := fs.Arg(0)
 
-	cfg, err := config.Load(paths.Config)
+	cfg, err := config.LoadOrCreate(paths.Config)
 	if err != nil {
 		return fmt.Errorf("cli.run: %w", err)
 	}

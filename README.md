@@ -18,7 +18,7 @@ make build   # bin/tunz
 
 ## Config
 
-`~/.config/tunnelizer/config.yaml` (created by `tunz add`):
+`~/.config/tunnelizer/config.yaml` (created empty on the first run):
 
 ```yaml
 defaults:
@@ -44,7 +44,8 @@ tunnels:
 A tunnel field overrides the matching `defaults` field. Required after merging: `host`,
 `local_port`, `remote_host`, `remote_port`.
 
-`tunz ls` and `tunz up` require the config file; `tunz add` creates it with its directory.
+Every command creates the config file with its directory if it is missing, so `tunz ls` works on a
+fresh install.
 
 ## Commands
 

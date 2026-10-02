@@ -29,7 +29,7 @@ func runDown(paths Paths, args []string) error {
 		return fmt.Errorf("cli.down: %w", err)
 	}
 
-	cfg, err := loadOrEmpty(paths.Config)
+	cfg, err := config.LoadOrCreate(paths.Config)
 	if err != nil {
 		return fmt.Errorf("cli.down: %w", err)
 	}
