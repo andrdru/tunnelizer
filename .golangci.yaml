@@ -1,0 +1,56 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - errorlint
+    - err113
+    - govet
+    - staticcheck
+    - gocritic
+    - revive
+    - gosec
+    - nilnil
+    - nilerr
+    - fatcontext
+    - nakedret
+    - nestif
+    - mnd
+    - lll
+    - makezero
+    - noctx
+    - unparam
+    - unconvert
+    - unused
+    - wastedassign
+    - whitespace
+    - prealloc
+    - intrange
+    - copyloopvar
+    - paralleltest
+    - tparallel
+    - testifylint
+    - rowserrcheck
+    - sqlclosecheck
+    - bodyclose
+    - goprintffuncname
+    - misspell
+    - gochecknoinits
+    - gocheckcompilerdirectives
+    - nolintlint
+    - wsl_v5
+  settings:
+    govet:
+      enable:
+        - shadow
+    lll:
+      line-length: 140
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
