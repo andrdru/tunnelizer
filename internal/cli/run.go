@@ -9,7 +9,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/andrdru/tunnelizer/internal/config"
 	"github.com/andrdru/tunnelizer/internal/state"
 	"github.com/andrdru/tunnelizer/internal/tunnel"
 )
@@ -17,17 +16,18 @@ import (
 func runRunner(paths Paths, args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseArgs(fs, args)
+	if err != nil {
 		return fmt.Errorf("cli.run: %w", err)
 	}
 
-	if fs.NArg() != 1 {
+	if len(positional) != 1 {
 		return fmt.Errorf("cli.run: %w", ErrUsage)
 	}
 
-	alias := fs.Arg(0)
+	alias := positional[0]
 
-	cfg, err := config.LoadOrCreate(paths.Config)
+	cfg, err := loadConfig(paths)
 	if err != nil {
 		return fmt.Errorf("cli.run: %w", err)
 	}

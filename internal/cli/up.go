@@ -9,30 +9,41 @@ import (
 	"os/exec"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/andrdru/tunnelizer/internal/config"
 	"github.com/andrdru/tunnelizer/internal/state"
 	"github.com/andrdru/tunnelizer/internal/tunnel"
 )
 
-var ErrAlreadyRunning = errors.New("tunnel is already running")
+var (
+	ErrAlreadyRunning = errors.New("tunnel is already running")
+	ErrNotConnected   = errors.New("tunnel is not connected")
+)
 
-const logFilePerm = 0o600
+const (
+	logFilePerm = 0o600
+	logExt      = ".log"
+
+	upTimeout  = 10 * time.Second
+	upPollStep = 200 * time.Millisecond
+)
 
 func runUp(paths Paths, args []string) error {
 	fs := flag.NewFlagSet("up", flag.ContinueOnError)
 	all := fs.Bool("all", false, "bring up all tunnels from config")
 
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("cli.up: %w", err)
-	}
-
-	cfg, err := config.LoadOrCreate(paths.Config)
+	positional, err := parseArgs(fs, args)
 	if err != nil {
 		return fmt.Errorf("cli.up: %w", err)
 	}
 
-	aliases, err := pickAliases(*all, fs.Args(), cfg.Aliases())
+	cfg, err := loadConfig(paths)
+	if err != nil {
+		return fmt.Errorf("cli.up: %w", err)
+	}
+
+	aliases, err := pickAliases(*all, positional, cfg.Aliases())
 	if err != nil {
 		return fmt.Errorf("cli.up: %w", err)
 	}
@@ -42,15 +53,11 @@ func runUp(paths Paths, args []string) error {
 	failed := false
 
 	for _, alias := range aliases {
-		if uerr := upOne(ctx, cfg, store, alias); uerr != nil {
+		if uerr := upAndWait(ctx, cfg, store, alias); uerr != nil {
 			fmt.Fprintf(os.Stderr, "tunz up %s: %v\n", alias, uerr)
 
 			failed = true
-
-			continue
 		}
-
-		fmt.Printf("%s: up\n", alias)
 	}
 
 	if failed {
@@ -60,32 +67,112 @@ func runUp(paths Paths, args []string) error {
 	return nil
 }
 
-func upOne(ctx context.Context, cfg *config.Config, store *state.Store, alias string) error {
+func upAndWait(ctx context.Context, cfg *config.Config, store *state.Store, alias string) error {
 	rt, err := cfg.Resolve(alias)
 	if err != nil {
-		return fmt.Errorf("cli.upOne: %w", err)
+		return fmt.Errorf("cli.upAndWait: %w", err)
 	}
 
-	if pid, perr := store.ReadPID(alias); perr == nil && state.PIDAlive(pid) {
-		return fmt.Errorf("cli.upOne %q: %w", alias, ErrAlreadyRunning)
+	if err := upOne(ctx, store, rt); err != nil {
+		return fmt.Errorf("cli.upAndWait: %w", err)
+	}
+
+	if err := waitUp(ctx, store, rt); err != nil {
+		return fmt.Errorf("cli.upAndWait: %w", err)
+	}
+
+	return nil
+}
+
+func upOne(ctx context.Context, store *state.Store, rt config.ResolvedTunnel) error {
+	if pid, perr := store.ReadPID(rt.Alias); perr == nil && state.PIDAlive(pid) {
+		return fmt.Errorf("cli.upOne %q: %w", rt.Alias, ErrAlreadyRunning)
 	}
 
 	if rt.Interactive {
-		if merr := startMaster(ctx, rt, store.SockPath(alias)); merr != nil {
+		if merr := startMaster(ctx, rt, store.SockPath(rt.Alias)); merr != nil {
 			return fmt.Errorf("cli.upOne: %w", merr)
 		}
 	}
 
-	pid, err := spawnRunner(ctx, store, alias)
+	pid, err := spawnRunner(ctx, store, rt.Alias)
 	if err != nil {
 		return fmt.Errorf("cli.upOne: %w", err)
 	}
 
-	if err := store.WritePID(alias, pid); err != nil {
+	if err := store.WritePID(rt.Alias, pid); err != nil {
 		return fmt.Errorf("cli.upOne: %w", err)
 	}
 
 	return nil
+}
+
+// waitUp ждёт, пока локальный порт туннеля начнёт принимать соединения, либо раннер сдастся.
+func waitUp(ctx context.Context, store *state.Store, rt config.ResolvedTunnel) error {
+	pid, ok := runnerPID(store, rt.Alias)
+	if !ok {
+		return notConnectedError(store, rt.Alias, 0, "runner is not running")
+	}
+
+	deadline := time.Now().Add(upTimeout)
+
+	for time.Now().Before(deadline) {
+		if state.Probe(ctx, rt.LocalPort) {
+			fmt.Printf("%s: connected, local port %d is open\n", rt.Alias, rt.LocalPort)
+
+			return nil
+		}
+
+		if !state.PIDAlive(pid) {
+			return notConnectedError(store, rt.Alias, pid, "runner is not running")
+		}
+
+		if reason := authRequiredReason(store, rt.Alias, pid); reason != "" {
+			return notConnectedError(store, rt.Alias, pid, reason)
+		}
+
+		time.Sleep(upPollStep)
+	}
+
+	return notConnectedError(store, rt.Alias, pid, fmt.Sprintf("local port %d did not open in %s", rt.LocalPort, upTimeout))
+}
+
+// runnerPID возвращает pid живого раннера.
+func runnerPID(store *state.Store, alias string) (int, bool) {
+	pid, err := store.ReadPID(alias)
+	if err != nil || !state.PIDAlive(pid) {
+		return 0, false
+	}
+
+	return pid, true
+}
+
+// authRequiredReason смотрит только состояние, принадлежащее текущему раннеру:
+// старый state-файл от предыдущего запуска не должен ронять свежий up.
+func authRequiredReason(store *state.Store, alias string, pid int) string {
+	st, err := store.Read(alias)
+	if err != nil || st.PID != pid {
+		return ""
+	}
+
+	if state.EffectiveStatus(st, state.PIDAlive) == state.StatusAuthRequired {
+		return "ssh asked for interactive auth again"
+	}
+
+	return ""
+}
+
+func notConnectedError(store *state.Store, alias string, pid int, reason string) error {
+	st, err := store.Read(alias)
+	if err == nil && st.PID == pid && st.LastError != "" {
+		reason = fmt.Sprintf("%s: %s", reason, st.LastError)
+	}
+
+	return fmt.Errorf("cli.waitUp: %w: %s (log: %s)", ErrNotConnected, reason, logPath(store, alias))
+}
+
+func logPath(store *state.Store, alias string) string {
+	return filepath.Join(store.Dir(), alias+logExt)
 }
 
 func startMaster(ctx context.Context, rt config.ResolvedTunnel, sockPath string) error {
@@ -111,9 +198,9 @@ func spawnRunner(ctx context.Context, store *state.Store, alias string) (int, er
 		return 0, fmt.Errorf("cli.spawnRunner: %w", merr)
 	}
 
-	logPath := filepath.Join(store.Dir(), alias+".log")
+	path := logPath(store, alias)
 
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, logFilePerm) // #nosec G304 -- path is built from own state dir
+	logFile, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, logFilePerm) // #nosec G304 -- own state dir
 	if err != nil {
 		return 0, fmt.Errorf("cli.spawnRunner: %w", err)
 	}
