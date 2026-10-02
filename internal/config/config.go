@@ -95,6 +95,25 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+func LoadOrCreate(path string) (*Config, error) {
+	cfg, err := Load(path)
+	if err == nil {
+		return cfg, nil
+	}
+
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("load: %w", err)
+	}
+
+	cfg = &Config{}
+
+	if err := Save(path, cfg); err != nil {
+		return nil, fmt.Errorf("config.LoadOrCreate: %w", err)
+	}
+
+	return cfg, nil
+}
+
 func Save(path string, cfg *Config) error {
 	data, err := yaml.Marshal(cfg)
 	if err != nil {

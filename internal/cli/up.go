@@ -27,7 +27,7 @@ func runUp(paths Paths, args []string) error {
 		return fmt.Errorf("cli.up: %w", err)
 	}
 
-	cfg, err := config.Load(paths.Config)
+	cfg, err := config.LoadOrCreate(paths.Config)
 	if err != nil {
 		return fmt.Errorf("cli.up: %w", err)
 	}

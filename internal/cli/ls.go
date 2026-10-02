@@ -23,7 +23,7 @@ func runLs(paths Paths, args []string) error {
 		return fmt.Errorf("cli.ls: %w", err)
 	}
 
-	cfg, err := config.Load(paths.Config)
+	cfg, err := config.LoadOrCreate(paths.Config)
 	if err != nil {
 		return fmt.Errorf("cli.ls: %w", err)
 	}
