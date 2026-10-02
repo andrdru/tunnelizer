@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -21,6 +22,15 @@ var (
 const (
 	MinPort = 1
 	MaxPort = 65535
+
+	DefaultSSHPort = 22
+
+	LocalHost = "127.0.0.1"
+
+	placeholderHost = "{host}"
+	placeholderPort = "{port}"
+
+	DefaultDSNTemplate = "jdbc:postgresql://" + placeholderHost + ":" + placeholderPort + "/postgres"
 
 	filePerm = 0o600
 	dirPerm  = 0o700
@@ -44,6 +54,7 @@ type Tunnel struct {
 	LocalPort    int    `yaml:"local_port,omitempty"`
 	RemoteHost   string `yaml:"remote_host,omitempty"`
 	RemotePort   int    `yaml:"remote_port,omitempty"`
+	DSN          string `yaml:"dsn,omitempty"`
 	Interactive  *bool  `yaml:"interactive,omitempty"`
 }
 
@@ -57,6 +68,29 @@ type ResolvedTunnel struct {
 	RemoteHost   string
 	RemotePort   int
 	Interactive  bool
+}
+
+// DefaultsPatch — изменения defaults: nil-поле не трогается, указатель на пустое значение очищает поле.
+type DefaultsPatch struct {
+	User         *string
+	Port         *int
+	IdentityFile *string
+	RemoteHost   *string
+	RemotePort   *int
+	Interactive  *bool
+}
+
+// TunnelPatch — изменения туннеля: nil-поле не трогается, указатель на пустое значение очищает поле.
+type TunnelPatch struct {
+	Host         *string
+	User         *string
+	Port         *int
+	IdentityFile *string
+	LocalPort    *int
+	RemoteHost   *string
+	RemotePort   *int
+	DSN          *string
+	Interactive  *bool
 }
 
 type Config struct {
@@ -95,7 +129,7 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-func LoadOrCreate(path string) (*Config, error) {
+func LoadOrCreate(path string, seed Defaults) (*Config, error) {
 	cfg, err := Load(path)
 	if err == nil {
 		return cfg, nil
@@ -105,7 +139,7 @@ func LoadOrCreate(path string) (*Config, error) {
 		return nil, fmt.Errorf("load: %w", err)
 	}
 
-	cfg = &Config{}
+	cfg = &Config{Defaults: seed}
 
 	if err := Save(path, cfg); err != nil {
 		return nil, fmt.Errorf("config.LoadOrCreate: %w", err)
@@ -159,28 +193,60 @@ func (c *Config) Validate() error {
 }
 
 func (c *Config) Resolve(alias string) (ResolvedTunnel, error) {
-	t, ok := c.Tunnels[alias]
-	if !ok {
-		return ResolvedTunnel{}, fmt.Errorf("config.Resolve %q: %w", alias, ErrTunnelNotFound)
+	t, err := c.Effective(alias)
+	if err != nil {
+		return ResolvedTunnel{}, fmt.Errorf("config.Resolve: %w", err)
 	}
 
-	rt := ResolvedTunnel{
+	return ResolvedTunnel{
 		Alias:        alias,
+		Host:         t.Host,
+		User:         t.User,
+		Port:         t.Port,
+		IdentityFile: expandHome(t.IdentityFile),
+		LocalPort:    t.LocalPort,
+		RemoteHost:   t.RemoteHost,
+		RemotePort:   t.RemotePort,
+		Interactive:  t.Interactive != nil && *t.Interactive,
+	}, nil
+}
+
+// Effective отдаёт туннель после мерджа с defaults, не разворачивая "~/" в identity_file:
+// значения годятся для переноса на другую машину и для предзаполнения формы.
+func (c *Config) Effective(alias string) (Tunnel, error) {
+	t, ok := c.Tunnels[alias]
+	if !ok {
+		return Tunnel{}, fmt.Errorf("config.Effective %q: %w", alias, ErrTunnelNotFound)
+	}
+
+	eff := Tunnel{
 		Host:         t.Host,
 		User:         cmp.Or(t.User, c.Defaults.User),
 		Port:         cmp.Or(t.Port, c.Defaults.Port),
-		IdentityFile: expandHome(cmp.Or(t.IdentityFile, c.Defaults.IdentityFile)),
+		IdentityFile: cmp.Or(t.IdentityFile, c.Defaults.IdentityFile),
 		LocalPort:    t.LocalPort,
 		RemoteHost:   cmp.Or(t.RemoteHost, c.Defaults.RemoteHost),
 		RemotePort:   cmp.Or(t.RemotePort, c.Defaults.RemotePort),
-		Interactive:  c.Defaults.Interactive,
+		DSN:          t.DSN,
 	}
 
-	if t.Interactive != nil {
-		rt.Interactive = *t.Interactive
+	if effectiveInteractive(c.Defaults.Interactive, t.Interactive) {
+		enabled := true
+		eff.Interactive = &enabled
 	}
 
-	return rt, nil
+	return eff, nil
+}
+
+func (c *Config) DSN(alias string) (string, error) {
+	t, err := c.Effective(alias)
+	if err != nil {
+		return "", fmt.Errorf("config.DSN: %w", err)
+	}
+
+	template := strings.ReplaceAll(cmp.Or(t.DSN, DefaultDSNTemplate), placeholderHost, LocalHost)
+
+	return strings.ReplaceAll(template, placeholderPort, strconv.Itoa(t.LocalPort)), nil
 }
 
 func (c *Config) Aliases() []string {
@@ -206,6 +272,88 @@ func (c *Config) Add(alias string, t Tunnel) error {
 	c.Tunnels[alias] = t
 
 	return nil
+}
+
+func (c *Config) Set(alias string, t Tunnel) {
+	if c.Tunnels == nil {
+		c.Tunnels = make(map[string]Tunnel)
+	}
+
+	c.Tunnels[alias] = t
+}
+
+func (d Defaults) With(p DefaultsPatch) Defaults {
+	override(&d.User, p.User)
+	override(&d.Port, p.Port)
+	override(&d.IdentityFile, p.IdentityFile)
+	override(&d.RemoteHost, p.RemoteHost)
+	override(&d.RemotePort, p.RemotePort)
+
+	if p.Interactive != nil {
+		d.Interactive = *p.Interactive
+	}
+
+	return d
+}
+
+func (t Tunnel) With(p TunnelPatch) Tunnel {
+	override(&t.Host, p.Host)
+	override(&t.User, p.User)
+	override(&t.Port, p.Port)
+	override(&t.IdentityFile, p.IdentityFile)
+	override(&t.LocalPort, p.LocalPort)
+	override(&t.RemoteHost, p.RemoteHost)
+	override(&t.RemotePort, p.RemotePort)
+	override(&t.DSN, p.DSN)
+
+	if p.Interactive != nil {
+		value := *p.Interactive
+		t.Interactive = &value
+	}
+
+	return t
+}
+
+func (t Tunnel) Diff(next Tunnel) TunnelPatch {
+	var p TunnelPatch
+
+	if t.Host != next.Host {
+		p.Host = &next.Host
+	}
+
+	if t.User != next.User {
+		p.User = &next.User
+	}
+
+	if t.Port != next.Port {
+		p.Port = &next.Port
+	}
+
+	if t.IdentityFile != next.IdentityFile {
+		p.IdentityFile = &next.IdentityFile
+	}
+
+	if t.LocalPort != next.LocalPort {
+		p.LocalPort = &next.LocalPort
+	}
+
+	if t.RemoteHost != next.RemoteHost {
+		p.RemoteHost = &next.RemoteHost
+	}
+
+	if t.RemotePort != next.RemotePort {
+		p.RemotePort = &next.RemotePort
+	}
+
+	if t.DSN != next.DSN {
+		p.DSN = &next.DSN
+	}
+
+	if next.Interactive != nil && !equalBoolPtr(t.Interactive, next.Interactive) {
+		p.Interactive = next.Interactive
+	}
+
+	return p
 }
 
 func (rt ResolvedTunnel) Validate() error {
@@ -254,4 +402,26 @@ func expandHome(path string) string {
 	}
 
 	return filepath.Join(home, strings.TrimPrefix(path, homePref))
+}
+
+func effectiveInteractive(def bool, own *bool) bool {
+	if own != nil {
+		return *own
+	}
+
+	return def
+}
+
+func equalBoolPtr(a, b *bool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+
+	return *a == *b
+}
+
+func override[T any](dst *T, src *T) {
+	if src != nil {
+		*dst = *src
+	}
 }

@@ -25,11 +25,12 @@ func runDown(paths Paths, args []string) error {
 	fs := flag.NewFlagSet("down", flag.ContinueOnError)
 	all := fs.Bool("all", false, "bring down all tunnels from config and state")
 
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseArgs(fs, args)
+	if err != nil {
 		return fmt.Errorf("cli.down: %w", err)
 	}
 
-	cfg, err := config.LoadOrCreate(paths.Config)
+	cfg, err := loadConfig(paths)
 	if err != nil {
 		return fmt.Errorf("cli.down: %w", err)
 	}
@@ -42,7 +43,7 @@ func runDown(paths Paths, args []string) error {
 		return fmt.Errorf("cli.down: %w", err)
 	}
 
-	aliases, err := pickAliases(*all, fs.Args(), unionAliases(cfg, states))
+	aliases, err := pickAliases(*all, positional, unionAliases(cfg, states))
 	if err != nil {
 		return fmt.Errorf("cli.down: %w", err)
 	}
@@ -82,8 +83,10 @@ func downOne(ctx context.Context, cfg *config.Config, store *state.Store, alias 
 	killOrphanSSH(store, alias)
 
 	rt, rerr := cfg.Resolve(alias)
-	if rerr == nil && rt.Interactive {
-		stopMaster(ctx, rt, store.SockPath(alias))
+	if rerr == nil && (rt.Interactive || fileExists(store.SockPath(alias))) {
+		sockPath := store.SockPath(alias)
+		stopMaster(ctx, rt, sockPath)
+		removeSock(sockPath)
 	}
 
 	if err := store.Remove(alias); err != nil {
@@ -141,5 +144,36 @@ func stopMaster(ctx context.Context, rt config.ResolvedTunnel, sockPath string) 
 
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "tunz: failed to stop master for %s: %v\n", rt.Alias, err)
+	}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Lstat(path)
+
+	return err == nil
+}
+
+// removeSock удаляет оставшийся файл мастер-сокета: сокет лежит в нашем state-каталоге
+// и создан под наш ssh -S, поэтому файл заведомо наш. Не сокет — не трогаем.
+func removeSock(path string) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tunz: failed to inspect %s: %v\n", path, err)
+
+		return
+	}
+
+	if info.Mode()&os.ModeSocket == 0 {
+		fmt.Fprintf(os.Stderr, "tunz: skip %s: not a socket\n", path)
+
+		return
+	}
+
+	if err := os.Remove(path); err != nil {
+		fmt.Fprintf(os.Stderr, "tunz: failed to remove %s: %v\n", path, err)
 	}
 }
