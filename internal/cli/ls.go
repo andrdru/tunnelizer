@@ -28,7 +28,6 @@ const (
 
 type tableRow struct {
 	cells []string
-	dsn   string
 }
 
 func runLs(paths Paths, args []string) error {
@@ -110,15 +109,10 @@ func lsRow(ctx context.Context, cfg *config.Config, byAlias map[string]state.Sta
 		},
 	}
 
-	if dsn, derr := cfg.DSN(alias); derr == nil {
-		row.dsn = dsn
-	}
-
 	return row
 }
 
 // renderRows печатает таблицу в рамке: ширины колонок — максимум по строкам, заголовок по центру.
-// Строка DSN идёт после строки туннеля во всю ширину таблицы, чтобы URL копировался одной строкой.
 func renderRows(w io.Writer, rows []tableRow) error {
 	widths := columnWidths(rows)
 
@@ -140,24 +134,7 @@ func columnWidths(rows []tableRow) []int {
 		}
 	}
 
-	inner := innerWidth(rows[0].cells, widths)
-	deficit := 0
-
-	for _, row := range rows {
-		if row.dsn == "" {
-			continue
-		}
-
-		deficit = max(deficit, utf8.RuneCountInString(cellSpace+row.dsn+cellSpace)-inner)
-	}
-
-	widths[len(widths)-1] += deficit
-
 	return widths
-}
-
-func innerWidth(cells []string, widths []int) int {
-	return utf8.RuneCountInString(formatCells(cells, widths)) - 2*utf8.RuneCountInString(cellBorder)
 }
 
 func tableLines(rows []tableRow, widths []int) []string {
@@ -169,10 +146,6 @@ func tableLines(rows []tableRow, widths []int) []string {
 
 	for i, row := range rows[1:] {
 		lines = append(lines, formatCells(row.cells, widths))
-
-		if row.dsn != "" {
-			lines = append(lines, formatDSNRow(row.dsn, innerWidth(rows[0].cells, widths)))
-		}
 
 		if i == len(rows)-2 {
 			lines = append(lines, borderLine(widths, "└", "┴", "┘"))
@@ -216,12 +189,6 @@ func formatCells(cells []string, widths []int) string {
 	}
 
 	return cellBorder + strings.Join(parts, cellBorder) + cellBorder
-}
-
-func formatDSNRow(dsn string, inner int) string {
-	padding := inner - utf8.RuneCountInString(dsn) - cellPadding
-
-	return cellBorder + cellSpace + dsn + strings.Repeat(cellSpace, padding) + cellBorder
 }
 
 func pad(cell string, width int) string {

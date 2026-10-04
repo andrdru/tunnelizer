@@ -33,7 +33,7 @@ tunnels:
   db-prod:
     host: bastion.example.com   # ssh entry host
     local_port: 5432            # locally: psql -h localhost -p 5432
-    dsn: jdbc:postgresql://{host}:{port}/app   # template for tunz ls / tunz export
+    dsn: jdbc:postgresql://{host}:{port}/app   # template for tunz export
 
   corp-db:
     host: gateway.corp.com
@@ -82,15 +82,10 @@ working unchanged.
 │  ALIAS  │     LOCAL      │      REMOTE      │        HOST         │ STATUS │ PORT │ UPTIME │ RESTARTS │
 ├─────────┼────────────────┼──────────────────┼─────────────────────┼────────┼──────┼────────┼──────────┤
 │ db-prod │ 127.0.0.1:5432 │ db.internal:5432 │ bastion.example.com │ up     │ open │ 1m2s   │ 0        │
-│ jdbc:postgresql://127.0.0.1:5432/app                                                                  │
 ├─────────┼────────────────┼──────────────────┼─────────────────────┼────────┼──────┼────────┼──────────┤
 │ corp-db │ 127.0.0.1:5433 │ 10.0.5.20:5432   │ gateway.corp.com    │ down   │ -    │ -      │ -        │
-│ jdbc:postgresql://127.0.0.1:5433/postgres                                                             │
 └─────────┴────────────────┴──────────────────┴─────────────────────┴────────┴──────┴────────┴──────────┘
 ```
-
-The JDBC URL is printed on its own line inside the table frame, under every tunnel row, so it can be
-copied into an IDE data source in one go.
 
 | Status | Meaning |
 |---|---|
