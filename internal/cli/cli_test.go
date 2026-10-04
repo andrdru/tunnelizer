@@ -325,7 +325,7 @@ tunnels:
 	require.ErrorIs(t, err, config.ErrTunnelNotFound)
 }
 
-func TestLsShowsDSN(t *testing.T) {
+func TestLsRendersTable(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // подмена HOME: t.Parallel() нельзя
 	writeTestConfig(t, `
 tunnels:
@@ -348,7 +348,7 @@ tunnels:
 	require.NoError(t, err)
 
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	require.Len(t, lines, 9)
+	require.Len(t, lines, 7)
 
 	for _, line := range lines {
 		assert.Equal(t, utf8.RuneCountInString(lines[0]), utf8.RuneCountInString(line), "ragged table: %q", line)
@@ -356,9 +356,8 @@ tunnels:
 
 	assert.Contains(t, lines[1], "ALIAS")
 	assert.Contains(t, lines[3], "127.0.0.1:5433")
-	assert.Equal(t, "jdbc:postgresql://127.0.0.1:5433/app", strings.Trim(lines[4], "│ "))
-	assert.Contains(t, lines[6], "127.0.0.1:5672")
-	assert.Equal(t, "jdbc:postgresql://127.0.0.1:5672/postgres", strings.Trim(lines[7], "│ "))
+	assert.Contains(t, lines[5], "127.0.0.1:5672")
+	assert.NotContains(t, out, "jdbc:")
 }
 
 func TestAliasRequiredWithoutTTY(t *testing.T) {

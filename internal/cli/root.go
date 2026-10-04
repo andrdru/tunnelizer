@@ -78,7 +78,7 @@ Usage:
   tunz export [<alias>] [--format cmd|yaml|dsn]      print tunnel as a command line, yaml block or JDBC DSN
   tunz up [<alias> ...] [--all]                      bring tunnel(s) up (picker if alias omitted)
   tunz down [<alias> ...] [--all]                    bring tunnel(s) down (picker if alias omitted)
-  tunz ls                                            show tunnels status and JDBC DSN
+  tunz ls                                            show tunnels status
   tunz help                                          show this help
 `)
 }
